@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Rapido Demo – Login + Multiple Vehicles</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link rel="stylesheet"
+ href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+body { margin:0; font-family:Arial; background:#f5f5f5; }
+header {
+  background:#ffcc00;
+  padding:14px;
+  font-size:22px;
+  font-weight:bold;
+  text-align:center;
+}
+#login {
+  padding:30px;
+  max-width:350px;
+  margin:80px auto;
+  background:#fff;
+  border-radius:10px;
+}
+#login input, #login button {
+  width:100%;
+  padding:12px;
+  margin-top:10px;
+  border-radius:8px;
+  border:1px solid #ccc;
+}
+#login button {
+  background:#ffcc00;
+  border:none;
+  font-size:16px;
+  font-weight:bold;
+}
+#app { display:none; }
+#map { height:60vh; }
+.panel { padding:15px; background:#fff; }
+select, input[type="range"], button {
+  width:100%;
+  padding:12px;
+  margin-top:10px;
+  border-radius:8px;
+  border:1px solid #ccc;
+}
+button {
+  background:#ffcc00;
+  border:none;
+  font-size:16px;
+  font-weight:bold;
+}
+.stat { font-weight:bold; margin-top:6px; }
+.status {
+  text-align:center;
+  margin-top:10px;
+  font-weight:bold;
+  color:green;
+}
+.logout { background:#eee; }
+</style>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <h2>Login</h2>
+  <input type="text" placeholder="Phone number">
+  <input type="text" placeholder="OTP (any number)">
+  <button onclick="login()">Login</button>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header>Rapido Demo</header>
+  <button class="logout" onclick="logout()">Logout</button>
+  <div id="map"></div>
+
+  <div class="panel">
+    <select id="vehicle" onchange="updateVehicle()">
+      <option value="bike">Bike</option>
+      <option value="auto">Auto</option>
+      <option value="cab">Cab</option>
+      <option value="premium">Premium Cab</option>
+    </select>
+
+    <label>Speed (Realtime)</label>
+    <input type="range" id="speed" min="100" max="1500" step="100" value="600">
+
+    <div class="stat">Distance: <span id="distance">-</span></div>
+    <div class="stat">Fare: ₹<span id="fare">-</span></div>
+    <div class="stat">ETA: <span id="eta">-</span></div>
+
+    <button onclick="bookRide()">Book Ride</button>
+    <div class="status" id="status"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+/* ✅ VEHICLE CONFIG (CHANGE FARES HERE) */
+const VEHICLES = {
+  bike:    { farePerKm: 12, speedFactor: 1 },
+  auto:    { farePerKm: 16, speedFactor: 0.9 },
+  cab:     { farePerKm: 20, speedFactor: 0.8 },
+  premium: { farePerKm: 30, speedFactor: 0.7 }
+};
+
+let currentVehicle = "bike";
+
+/* LOGIN */
+function login(){
+  document.getElementById("login").style.display="none";
+  document.getElementById("app").style.display="block";
+  initMap();
+}
+function logout(){ location.reload(); }
+
+/* MAP + RIDE */
+let map, pickup=null, drop=null, route=[], polyline=null;
+let rider=null, rideTimer=null, etaTimer=null, index=0;
+
+function initMap(){
+  map = L.map("map").setView([17.6868,83.2185],13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+  map.on("click", e=>{
+    if(!pickup){
+      pickup = L.marker(e.latlng).addTo(map).bindPopup("Pickup").openPopup();
+    } else if(!drop){
+      drop = L.marker(e.latlng).addTo(map).bindPopup("Drop").openPopup();
+      generateRoute();
+    }
+  });
+}
+
+function updateVehicle(){
+  currentVehicle = document.getElementById("vehicle").value;
+  updateStats();
+}
+
+function generateRoute(){
+  route=[];
+  const p = pickup.getLatLng();
+  const d = drop.getLatLng();
+
+  for(let i=0;i<=80;i++){
+    route.push({
+      lat: p.lat+(d.lat-p.lat)*i/80,
+      lng: p.lng+(d.lng-p.lng)*i/80
+    });
+  }
+
+  polyline && map.removeLayer(polyline);
+  polyline = L.polyline(route,{color:"blue"}).addTo(map);
+
+  updateStats();
+}
+
+function updateStats(){
+  if(!pickup||!drop) return;
+
+  const km = pickup.getLatLng().distanceTo(drop.getLatLng())/1000;
+  const config = VEHICLES[currentVehicle];
+
+  document.getElementById("distance").innerText = km.toFixed(2)+" km";
+  document.getElementById("fare").innerText = Math.ceil(km * config.farePerKm);
+  document.getElementById("eta").innerText =
+    Math.max(1,Math.ceil(km * 3 * config.speedFactor))+" min";
+}
+
+function bookRide(){
+  if(!route.length){ alert("Select pickup & drop"); return; }
+
+  document.getElementById("status").innerText="🚲 Ride Started";
+
+  rider && map.removeLayer(rider);
+  clearInterval(rideTimer); clearInterval(etaTimer);
+  index=0;
+
+  rider=L.circleMarker(route[0],{radius:6,color:"black"}).addTo(map);
+  rideTimer=setInterval(moveRider,getSpeed());
+  startETA();
+}
+
+function moveRider(){
+  if(index>=route.length){
+    clearInterval(rideTimer);
+    document.getElementById("status").innerText="✅ Ride Completed";
+    return;
+  }
+  rider.setLatLng(route[index++]);
+}
+
+function getSpeed(){ return parseInt(document.getElementById("speed").value); }
+
+document.getElementById("speed").addEventListener("input",()=>{
+  if(rideTimer){
+    clearInterval(rideTimer);
+    rideTimer=setInterval(moveRider,getSpeed());
+  }
+});
+
+function startETA(){
+  let eta=parseInt(document.getElementById("eta").innerText);
+  etaTimer=setInterval(()=>{
+    eta--;
+    document.getElementById("eta").innerText=
+      eta<=0?"Arrived":eta+" min";
+    if(eta<=0) clearInterval(etaTimer);
+  },60000);
+}
+</script>
+
+</body>
+</html>
